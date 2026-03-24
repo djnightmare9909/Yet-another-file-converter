@@ -1,0 +1,5 @@
+{
+  "name": "Universal Local Converter",
+  "description": "A 100% client-side file converter supporting Images, DOCX, XLSX, and various data formats.",
+  "requestFramePermissions": []
+}

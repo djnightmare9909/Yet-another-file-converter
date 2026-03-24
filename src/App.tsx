@@ -58,10 +58,57 @@ const loadImage = (dataUrl: string): Promise<HTMLImageElement> => new Promise((r
 
 // Heuristic to parse standard text
 const parseTextData = (text: string) => {
+  // 1. Try JSON
   try {
-    return { type: 'json', data: JSON.parse(text) };
+    const parsed = JSON.parse(text);
+    return { type: 'json', data: parsed };
   } catch (e) {}
   
+  // 2. Try XML (Basic heuristic)
+  if (text.trim().startsWith('<') && text.trim().endsWith('>')) {
+    try {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(text, "text/xml");
+      if (!xmlDoc.getElementsByTagName("parsererror").length) {
+        // Simple XML to JSON converter for internal processing
+        const xmlToJson = (node: Node): any => {
+          let obj: any = {};
+          if (node.nodeType === 1) { // element
+            const element = node as Element;
+            if (element.attributes.length > 0) {
+              obj["@attributes"] = {};
+              for (let j = 0; j < element.attributes.length; j++) {
+                const attribute = element.attributes.item(j);
+                if (attribute) obj["@attributes"][attribute.nodeName] = attribute.nodeValue;
+              }
+            }
+          } else if (node.nodeType === 3) { // text
+            obj = node.nodeValue;
+          }
+          if (node.hasChildNodes()) {
+            for (let i = 0; i < node.childNodes.length; i++) {
+              const item = node.childNodes.item(i);
+              const nodeName = item.nodeName;
+              if (typeof (obj[nodeName]) === "undefined") {
+                obj[nodeName] = xmlToJson(item);
+              } else {
+                if (typeof (obj[nodeName].push) === "undefined") {
+                  const old = obj[nodeName];
+                  obj[nodeName] = [];
+                  obj[nodeName].push(old);
+                }
+                obj[nodeName].push(xmlToJson(item));
+              }
+            }
+          }
+          return obj;
+        };
+        return { type: 'xml', data: xmlToJson(xmlDoc) };
+      }
+    } catch (e) {}
+  }
+
+  // 3. Try CSV
   const lines = text.trim().split('\n');
   if (lines.length > 1 && lines[0].includes(',')) {
     const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g, '').trim());
@@ -205,7 +252,8 @@ const convertFile = async (file: File, targetFormat: string) => {
     else outText = `[Image data converted to ${target}]\n\n${inputDataUrl}`;
   } else {
     // Text to Text
-    const rawObj = parsedData.type === 'json' || parsedData.type === 'csv' ? parsedData.data : { content: parsedData.data };
+    const isStructured = ['json', 'csv', 'xml'].includes(parsedData.type);
+    const rawObj = isStructured ? parsedData.data : { content: parsedData.data };
     const arrObj = Array.isArray(rawObj) ? rawObj : [rawObj];
     
     if (target === 'JSON') {
@@ -213,43 +261,51 @@ const convertFile = async (file: File, targetFormat: string) => {
     } else if (target === 'CSV') {
       if (arrObj.length === 0) outText = '';
       else {
-        // Build CSV from objects (handles Excel -> CSV well)
-        const headers = Array.from(new Set(arrObj.flatMap(Object.keys)));
-        outText = headers.join(',') + '\n' + arrObj.map(row => headers.map(h => `"${('' + (row[h]||'')).replace(/"/g, '\\"')}"`).join(',')).join('\n');
+        const headers = Array.from(new Set(arrObj.flatMap(obj => typeof obj === 'object' && obj !== null ? Object.keys(obj) : ['value'])));
+        outText = headers.join(',') + '\n' + arrObj.map(row => headers.map(h => {
+          const val = typeof row === 'object' && row !== null ? row[h] : row;
+          return `"${('' + (val ?? '')).replace(/"/g, '""')}"`;
+        }).join(',')).join('\n');
       }
     } else if (target === 'XML') {
-      const toXml = (obj: any) => {
-        let xml = '';
+      const toXml = (obj: any, name: string = 'item'): string => {
+        if (typeof obj !== 'object' || obj === null) return `<${name}>${obj}</${name}>`;
+        let xml = `<${name}>`;
         for (let prop in obj) {
-          const safeProp = prop.replace(/[^a-zA-Z0-9]/g, '') || 'item';
-          xml += `<${safeProp}>`;
-          if (typeof obj[prop] === 'object' && obj[prop] !== null) xml += toXml(obj[prop]);
-          else xml += obj[prop];
-          xml += `</${safeProp}>`;
+          const safeProp = prop.replace(/[^a-zA-Z0-9]/g, '') || 'prop';
+          xml += toXml(obj[prop], safeProp);
         }
+        xml += `</${name}>`;
         return xml;
       };
-      outText = `<data>${toXml(rawObj)}</data>`;
+      outText = `<?xml version="1.0" encoding="UTF-8"?>\n${toXml(rawObj, 'root')}`;
     } else if (target === 'HTML') {
-      if (parsedData.type === 'csv' || parsedData.type === 'json') {
-        const headers = Array.from(new Set(arrObj.flatMap(Object.keys)));
-        outText = `<table border="1">\n<tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr>\n` +
-          arrObj.map(row => `<tr>${headers.map(h=>`<td>${row[h] || ''}</td>`).join('')}</tr>`).join('\n') +
-          `\n</table>`;
+      if (isStructured) {
+        const headers = Array.from(new Set(arrObj.flatMap(obj => typeof obj === 'object' && obj !== null ? Object.keys(obj) : ['value'])));
+        outText = `<!DOCTYPE html><html><head><style>table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}th{background-color:#f2f2f2}</style></head><body>\n` +
+          `<table border="1">\n<thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>\n<tbody>` +
+          arrObj.map(row => `<tr>${headers.map(h => {
+            const val = typeof row === 'object' && row !== null ? row[h] : row;
+            return `<td>${typeof val === 'object' ? JSON.stringify(val) : (val ?? '')}</td>`;
+          }).join('')}</tr>`).join('\n') +
+          `\n</tbody></table>\n</body></html>`;
       } else {
-        outText = `<pre>${inputText}</pre>`;
+        outText = `<!DOCTYPE html><html><body><pre>${inputText}</pre></body></html>`;
       }
     } else if (target === 'MD') {
-      if (parsedData.type === 'csv' || parsedData.type === 'json') {
-        const headers = Array.from(new Set(arrObj.flatMap(Object.keys)));
+      if (isStructured) {
+        const headers = Array.from(new Set(arrObj.flatMap(obj => typeof obj === 'object' && obj !== null ? Object.keys(obj) : ['value'])));
         if(headers.length > 0) {
           outText = `| ${headers.join(' | ')} |\n| ${headers.map(()=>'---').join(' | ')} |\n` +
-            arrObj.map(row => `| ${headers.map(h=>row[h] || '').join(' | ')} |`).join('\n');
+            arrObj.map(row => `| ${headers.map(h => {
+              const val = typeof row === 'object' && row !== null ? row[h] : row;
+              return typeof val === 'object' ? JSON.stringify(val) : (val ?? '');
+            }).join(' | ')} |`).join('\n');
         } else {
-           outText = `\`\`\`\n${inputText}\n\`\`\``;
+           outText = `\`\`\`json\n${JSON.stringify(rawObj, null, 2)}\n\`\`\``;
         }
       } else {
-        outText = inputText; // For DOCX -> MD or TXT -> MD, just show the text
+        outText = inputText;
       }
     } else if (target === 'BASE64') {
       outText = btoa(unescape(encodeURIComponent(inputText)));

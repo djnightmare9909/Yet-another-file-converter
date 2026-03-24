@@ -8,8 +8,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { UploadCloud, FileType, Download, RefreshCw, AlertCircle, FileText, Image as ImageIcon, X, Copy, Check } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+
+console.log("Universal Local Converter: Initializing...");
 
 // --- External Script Loaders ---
 const loadScript = (url: string, globalVar: string) => {
@@ -26,6 +29,7 @@ const loadScript = (url: string, globalVar: string) => {
 const loadJsPDF = () => loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'jspdf');
 const loadMammoth = () => loadScript('https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js', 'mammoth');
 const loadSheetJS = () => loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', 'XLSX');
+const loadPdfJS = () => loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', 'pdfjsLib');
 
 // --- Universal Conversion Engine ---
 
@@ -92,8 +96,8 @@ const convertFile = async (file: File, targetFormat: string) => {
     const result = await mammoth.extractRawText({ arrayBuffer });
     inputText = result.value || "No text found in document.";
     parsedData = { type: 'text', data: inputText };
-  } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
-    // Actually parse the Excel spreadsheet
+  } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls') || filename.endsWith('.csv')) {
+    // Actually parse the Spreadsheet or CSV
     const arrayBuffer = await file.arrayBuffer();
     const XLSX: any = await loadSheetJS();
     const workbook = XLSX.read(arrayBuffer, { type: 'array' });
@@ -101,6 +105,23 @@ const convertFile = async (file: File, targetFormat: string) => {
     const jsonData = XLSX.utils.sheet_to_json(firstSheet);
     inputText = JSON.stringify(jsonData, null, 2);
     parsedData = { type: 'json', data: jsonData };
+  } else if (filename.endsWith('.pdf')) {
+    // Actually parse the PDF text
+    const arrayBuffer = await file.arrayBuffer();
+    const pdfjsLib: any = await loadPdfJS();
+    // Set worker source for pdf.js
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdf = await loadingTask.promise;
+    let fullText = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map((item: any) => item.str).join(' ');
+      fullText += pageText + '\n';
+    }
+    inputText = fullText || "No text found in PDF.";
+    parsedData = { type: 'text', data: inputText };
   } else {
     // Standard flat files (TXT, CSV, JSON, etc)
     inputText = await readFileAsText(file);

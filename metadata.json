@@ -1,5 +1,5 @@
 {
-  "name": "Universal Local Converter",
-  "description": "A 100% client-side file converter supporting Images, DOCX, XLSX, and various data formats.",
+  "name": "Universal File Processor",
+  "description": "A powerful client-side tool to convert, combine CSVs, and compress files into ZIP archives.",
   "requestFramePermissions": []
 }

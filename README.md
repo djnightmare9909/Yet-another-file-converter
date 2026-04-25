@@ -18,7 +18,7 @@ If you don't want to use the AI Studio environment and want to run this as a sta
 ### Installation
  1. **Clone the Repository**
    ```bash
-   git clone https://github.com/djnightmare9909/universal-file-converter
+   git clone https://github.com/djnightmare9909/Yet-another-file-converter
    cd universal-file-converter
    
    ```
